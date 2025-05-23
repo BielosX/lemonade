@@ -3,26 +3,30 @@ package internal
 import (
 	"fmt"
 	"github.com/gorilla/handlers"
+	"github.com/gorilla/mux"
 	"go.uber.org/zap"
+	"go.uber.org/zap/zapio"
 	"net/http"
 	"os"
 )
-
-func handleFunc(pattern string, handler http.HandlerFunc) {
-	http.Handle(pattern, handlers.LoggingHandler(os.Stdout, handler))
-}
 
 func Serve() {
 	logger := zap.Must(zap.NewDevelopment(zap.IncreaseLevel(zap.InfoLevel)))
 	defer Sync(logger)
 	sugar := logger.Sugar()
-	handleFunc("/health", func(w http.ResponseWriter, _ *http.Request) {
+
+	router := mux.NewRouter()
+	router.Use(func(next http.Handler) http.Handler {
+		writer := &zapio.Writer{Log: logger, Level: logger.Level()}
+		return handlers.LoggingHandler(writer, next)
+	})
+	router.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) {
 		_, err := w.Write([]byte("OK"))
 		if err != nil {
 			return
 		}
-		w.WriteHeader(http.StatusOK)
 	})
+	http.Handle("/", router)
 	port := GetEnvOrDefault("PORT", "8080")
 	sugar.Infof("Listening on port %s", port)
 	err := http.ListenAndServe(fmt.Sprintf(":%s", port), nil)
