@@ -13,7 +13,7 @@ func handleFunc(pattern string, handler http.HandlerFunc) {
 }
 
 func Serve() {
-	logger := zap.Must(zap.NewDevelopment())
+	logger := zap.Must(zap.NewDevelopment(zap.IncreaseLevel(zap.InfoLevel)))
 	defer Sync(logger)
 	sugar := logger.Sugar()
 	handleFunc("/health", func(w http.ResponseWriter, _ *http.Request) {
