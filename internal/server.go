@@ -2,13 +2,18 @@ package internal
 
 import (
 	"fmt"
-	"github.com/gorilla/handlers"
 	"github.com/gorilla/mux"
 	"go.uber.org/zap"
-	"go.uber.org/zap/zapio"
 	"net/http"
 	"os"
 )
+
+func health(w http.ResponseWriter, _ *http.Request) {
+	_, err := w.Write([]byte("OK"))
+	if err != nil {
+		return
+	}
+}
 
 func Serve() {
 	logger := zap.Must(zap.NewDevelopment(zap.IncreaseLevel(zap.InfoLevel)))
@@ -16,16 +21,8 @@ func Serve() {
 	sugar := logger.Sugar()
 
 	router := mux.NewRouter()
-	router.Use(func(next http.Handler) http.Handler {
-		writer := &zapio.Writer{Log: logger, Level: logger.Level()}
-		return handlers.LoggingHandler(writer, next)
-	})
-	router.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) {
-		_, err := w.Write([]byte("OK"))
-		if err != nil {
-			return
-		}
-	})
+	router.Use(LoggingMiddleware(logger))
+	router.HandleFunc("/health", health)
 	http.Handle("/", router)
 	port := GetEnvOrDefault("PORT", "8080")
 	sugar.Infof("Listening on port %s", port)

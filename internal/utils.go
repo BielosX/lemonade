@@ -1,7 +1,10 @@
 package internal
 
 import (
+	"github.com/gorilla/handlers"
 	"go.uber.org/zap"
+	"go.uber.org/zap/zapio"
+	"net/http"
 	"os"
 )
 
@@ -14,4 +17,11 @@ func GetEnvOrDefault(key, fallback string) string {
 		return value
 	}
 	return fallback
+}
+
+func LoggingMiddleware(logger *zap.Logger) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		writer := &zapio.Writer{Log: logger, Level: logger.Level()}
+		return handlers.LoggingHandler(writer, next)
+	}
 }
