@@ -1,0 +1,6 @@
+edition = "2023";
+option go_package = "/internal";
+
+message ServerMessage {
+  string query = 1;
+}

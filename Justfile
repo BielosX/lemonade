@@ -21,3 +21,6 @@ lint:
 fmt:
     gofmt -w cmd
     gofmt -w internal
+
+generate-protobuf: get-protoc
+    {{ protoc }} --proto_path=protobuf --go_out={{ justfile_directory() }} protobuf/*.proto
