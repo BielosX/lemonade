@@ -9,10 +9,8 @@ import (
 )
 
 func health(w http.ResponseWriter, _ *http.Request) {
-	_, err := w.Write([]byte("OK"))
-	if err != nil {
-		return
-	}
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write([]byte("OK"))
 }
 
 func Serve() {
