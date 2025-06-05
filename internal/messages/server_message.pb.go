@@ -4,7 +4,7 @@
 // 	protoc        v6.31.0
 // source: server_message.proto
 
-package internal
+package messages
 
 import (
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
@@ -71,7 +71,7 @@ const file_server_message_proto_rawDesc = "" +
 	"\n" +
 	"\x14server_message.proto\"%\n" +
 	"\rServerMessage\x12\x14\n" +
-	"\x05query\x18\x01 \x01(\tR\x05queryB\vZ\t/internalb\beditionsp\xe8\a"
+	"\x05query\x18\x01 \x01(\tR\x05queryB\x14Z\x12/internal/messagesb\beditionsp\xe8\a"
 
 var (
 	file_server_message_proto_rawDescOnce sync.Once

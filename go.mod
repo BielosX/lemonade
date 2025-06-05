@@ -10,6 +10,9 @@ require (
 )
 
 require (
+	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/felixge/httpsnoop v1.0.3 // indirect
+	github.com/gorilla/websocket v1.5.3 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
+	golang.org/x/time v0.11.0 // indirect
 )
