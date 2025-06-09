@@ -1,6 +1,7 @@
 package internal
 
 import (
+	"encoding/json"
 	"fmt"
 	"github.com/gorilla/mux"
 	"github.com/gorilla/websocket"
@@ -18,11 +19,39 @@ type Server struct {
 	upgrader          *websocket.Upgrader
 	connectionCounter atomic.Int64
 	gameNameRegex     *regexp.Regexp
+	maxGameNameLength uint
+	minGameNameLength uint
 }
 
 func health(w http.ResponseWriter, _ *http.Request) {
-	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write([]byte("OK"))
+	WriteWithStatus(w, http.StatusOK, "OK")
+}
+
+type NewGameRequestResponse struct {
+	Name string `json:"name,omitempty"`
+}
+
+func (s *Server) newGame(w http.ResponseWriter, r *http.Request) {
+	decoder := json.NewDecoder(r.Body)
+	request := NewGameRequestResponse{}
+	err := decoder.Decode(&request)
+	if err != nil {
+		WriteWithStatus(w, http.StatusBadRequest, "Unable to decode NewGameRequest")
+		return
+	}
+	var gameName string
+	if request.Name != "" && !s.gameNameRegex.MatchString(request.Name) {
+		WriteWithStatus(w,
+			http.StatusBadRequest,
+			fmt.Sprintf("Provided Game Name does not match expression %s", s.gameNameRegex.String()))
+		return
+	} else if request.Name == "" {
+		gameName = RandomAlphanumeric(s.maxGameNameLength)
+		s.logger.Infof("Received empty Game Name, generated name: %s", gameName)
+	} else {
+		gameName = request.Name
+	}
+	s.logger.Infof("Creating new game with name: %s", gameName)
 }
 
 func (s *Server) readMessage(conn *websocket.Conn, done *OneShot, output chan<- []byte) {
@@ -107,6 +136,8 @@ func (s *Server) webSocketHandler(w http.ResponseWriter, r *http.Request) {
 func NewServer(port uint16,
 	logger *zap.Logger,
 	maxWsConnections uint64,
+	maxGameNameLength uint,
+	minGameNameLength uint,
 	wsReadBufferSize int,
 	wsWriteBufferSize int) *Server {
 	upgrader := &websocket.Upgrader{
@@ -116,13 +147,15 @@ func NewServer(port uint16,
 			return true
 		},
 	}
-	regex, _ := regexp.Compile("^\\w{1,15}$")
+	regex, _ := regexp.Compile(fmt.Sprintf("^\\w{%d,%d}$", minGameNameLength, maxGameNameLength))
 	return &Server{
-		logger:           logger.Sugar(),
-		port:             port,
-		maxWsConnections: int64(maxWsConnections),
-		upgrader:         upgrader,
-		gameNameRegex:    regex,
+		logger:            logger.Sugar(),
+		port:              port,
+		maxWsConnections:  int64(maxWsConnections),
+		upgrader:          upgrader,
+		gameNameRegex:     regex,
+		maxGameNameLength: maxGameNameLength,
+		minGameNameLength: minGameNameLength,
 	}
 }
 
@@ -132,6 +165,7 @@ func (s *Server) Serve() {
 	router.Use(RealIP)
 	router.HandleFunc("/health", health).Methods("GET")
 	router.HandleFunc("/join/{name}", s.webSocketHandler).Methods("GET")
+	router.HandleFunc("/games", s.newGame).Methods("POST")
 
 	http.Handle("/", router)
 	s.logger.Infof("Starting Server with MaxWsConnections: %d, WsReadBufferSize: %d, WsWriteBufferSize: %d",

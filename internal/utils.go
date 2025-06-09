@@ -1,11 +1,13 @@
 package internal
 
 import (
+	"fmt"
 	"github.com/gorilla/handlers"
 	"github.com/gorilla/mux"
 	"github.com/gorilla/websocket"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapio"
+	"math/rand"
 	"net"
 	"net/http"
 	"strings"
@@ -43,4 +45,27 @@ func RealIP(next http.Handler) http.Handler {
 func WriteWithStatus(w http.ResponseWriter, status int, body string) {
 	w.WriteHeader(status)
 	_, _ = w.Write([]byte(body))
+}
+
+func charRange(from byte, to byte) string {
+	count := int(to - from + 1)
+	result := make([]byte, count)
+	for i := 0; i < count; i++ {
+		result[i] = from + byte(i)
+	}
+	return string(result)
+}
+
+var LowerLetters = charRange('a', 'z')
+var UpperLetters = charRange('A', 'Z')
+var Digits = charRange('0', '9')
+var Alphanumeric = fmt.Sprintf("%s%s%s", LowerLetters, UpperLetters, Digits)
+
+func RandomAlphanumeric(length uint) string {
+	result := make([]byte, length)
+	for i := uint(0); i < length; i++ {
+		index := rand.Int31n(int32(len(Alphanumeric)))
+		result[i] = Alphanumeric[index]
+	}
+	return string(result)
 }
