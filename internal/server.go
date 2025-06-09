@@ -7,6 +7,7 @@ import (
 	"go.uber.org/zap"
 	"net/http"
 	"os"
+	"regexp"
 	"sync/atomic"
 )
 
@@ -16,6 +17,7 @@ type Server struct {
 	maxWsConnections  int64
 	upgrader          *websocket.Upgrader
 	connectionCounter atomic.Int64
+	gameNameRegex     *regexp.Regexp
 }
 
 func health(w http.ResponseWriter, _ *http.Request) {
@@ -63,10 +65,15 @@ func (s *Server) writeMessage(conn *websocket.Conn, done *OneShot, input <-chan 
 
 func (s *Server) webSocketHandler(w http.ResponseWriter, r *http.Request) {
 	gameName := mux.Vars(r)["name"]
+	if !s.gameNameRegex.MatchString(gameName) {
+		WriteWithStatus(w,
+			http.StatusBadRequest,
+			fmt.Sprintf("GameName does not match expected expression: %s", s.gameNameRegex.String()))
+		return
+	}
 	s.logger.Infof("%s joining the game %s", r.RemoteAddr, gameName)
 	if !websocket.IsWebSocketUpgrade(r) {
-		w.WriteHeader(http.StatusBadRequest)
-		_, _ = w.Write([]byte("Expected WebSocket Upgrade request"))
+		WriteWithStatus(w, http.StatusBadRequest, "Expected WebSocket Upgrade request")
 		return
 	}
 	conn, err := s.upgrader.Upgrade(w, r, nil)
@@ -109,11 +116,13 @@ func NewServer(port uint16,
 			return true
 		},
 	}
+	regex, _ := regexp.Compile("^\\w{1,15}$")
 	return &Server{
 		logger:           logger.Sugar(),
 		port:             port,
 		maxWsConnections: int64(maxWsConnections),
 		upgrader:         upgrader,
+		gameNameRegex:    regex,
 	}
 }
 

@@ -39,3 +39,8 @@ func RealIP(next http.Handler) http.Handler {
 		next.ServeHTTP(w, r)
 	})
 }
+
+func WriteWithStatus(w http.ResponseWriter, status int, body string) {
+	w.WriteHeader(status)
+	_, _ = w.Write([]byte(body))
+}
