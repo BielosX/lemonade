@@ -62,6 +62,13 @@ func (s *Server) writeMessage(conn *websocket.Conn, done *OneShot, input <-chan 
 }
 
 func (s *Server) webSocketHandler(w http.ResponseWriter, r *http.Request) {
+	gameName := mux.Vars(r)["name"]
+	s.logger.Infof("%s joining the game %s", r.RemoteAddr, gameName)
+	if !websocket.IsWebSocketUpgrade(r) {
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte("Expected WebSocket Upgrade request"))
+		return
+	}
 	conn, err := s.upgrader.Upgrade(w, r, nil)
 	defer Close(conn)
 	if err != nil {
@@ -113,8 +120,9 @@ func NewServer(port uint16,
 func (s *Server) Serve() {
 	router := mux.NewRouter()
 	router.Use(LoggingMiddleware(s.logger.Desugar()))
-	router.HandleFunc("/health", health)
-	router.HandleFunc("/ws", s.webSocketHandler)
+	router.Use(RealIP)
+	router.HandleFunc("/health", health).Methods("GET")
+	router.HandleFunc("/join/{name}", s.webSocketHandler).Methods("GET")
 
 	http.Handle("/", router)
 	s.logger.Infof("Starting Server with MaxWsConnections: %d, WsReadBufferSize: %d, WsWriteBufferSize: %d",
