@@ -13,14 +13,17 @@ import (
 )
 
 type Server struct {
-	port              uint16
-	logger            *zap.SugaredLogger
-	maxWsConnections  int64
-	upgrader          *websocket.Upgrader
-	connectionCounter atomic.Int64
-	gameNameRegex     *regexp.Regexp
-	maxGameNameLength uint
-	minGameNameLength uint
+	port                uint16
+	logger              *zap.SugaredLogger
+	maxWsConnections    int64
+	upgrader            *websocket.Upgrader
+	connectionCounter   atomic.Int64
+	gameNameRegex       *regexp.Regexp
+	playerNameRegex     *regexp.Regexp
+	maxGameNameLength   uint
+	minGameNameLength   uint
+	maxPlayerNameLength uint
+	minPlayerNameLength uint
 }
 
 func health(w http.ResponseWriter, _ *http.Request) {
@@ -93,18 +96,26 @@ func (s *Server) writeMessage(conn *websocket.Conn, done *OneShot, input <-chan 
 }
 
 func (s *Server) webSocketHandler(w http.ResponseWriter, r *http.Request) {
-	gameName := mux.Vars(r)["name"]
+	vars := mux.Vars(r)
+	gameName := vars["gameName"]
+	playerName := vars["playerName"]
 	if !s.gameNameRegex.MatchString(gameName) {
 		WriteWithStatus(w,
 			http.StatusBadRequest,
 			fmt.Sprintf("GameName does not match expected expression: %s", s.gameNameRegex.String()))
 		return
 	}
-	s.logger.Infof("%s joining the game %s", r.RemoteAddr, gameName)
+	if !s.playerNameRegex.MatchString(playerName) {
+		WriteWithStatus(w,
+			http.StatusBadRequest,
+			fmt.Sprintf("PlayerName does not match expected expression: %s", s.playerNameRegex.String()))
+		return
+	}
 	if !websocket.IsWebSocketUpgrade(r) {
 		WriteWithStatus(w, http.StatusBadRequest, "Expected WebSocket Upgrade request")
 		return
 	}
+	s.logger.Infof("%s joining the game %s as %s", r.RemoteAddr, gameName, playerName)
 	conn, err := s.upgrader.Upgrade(w, r, nil)
 	defer Close(conn)
 	if err != nil {
@@ -138,6 +149,8 @@ func NewServer(port uint16,
 	maxWsConnections uint64,
 	maxGameNameLength uint,
 	minGameNameLength uint,
+	maxPlayerNameLength uint,
+	minPlayerNameLength uint,
 	wsReadBufferSize int,
 	wsWriteBufferSize int) *Server {
 	upgrader := &websocket.Upgrader{
@@ -147,15 +160,19 @@ func NewServer(port uint16,
 			return true
 		},
 	}
-	regex, _ := regexp.Compile(fmt.Sprintf("^\\w{%d,%d}$", minGameNameLength, maxGameNameLength))
+	gameNameRegex, _ := regexp.Compile(fmt.Sprintf("^\\w{%d,%d}$", minGameNameLength, maxGameNameLength))
+	playerNameRegex, _ := regexp.Compile(fmt.Sprintf("^\\w{%d,%d}$", minPlayerNameLength, maxPlayerNameLength))
 	return &Server{
-		logger:            logger.Sugar(),
-		port:              port,
-		maxWsConnections:  int64(maxWsConnections),
-		upgrader:          upgrader,
-		gameNameRegex:     regex,
-		maxGameNameLength: maxGameNameLength,
-		minGameNameLength: minGameNameLength,
+		logger:              logger.Sugar(),
+		port:                port,
+		maxWsConnections:    int64(maxWsConnections),
+		upgrader:            upgrader,
+		gameNameRegex:       gameNameRegex,
+		playerNameRegex:     playerNameRegex,
+		maxGameNameLength:   maxGameNameLength,
+		minGameNameLength:   minGameNameLength,
+		maxPlayerNameLength: maxPlayerNameLength,
+		minPlayerNameLength: minPlayerNameLength,
 	}
 }
 
@@ -164,7 +181,7 @@ func (s *Server) Serve() {
 	router.Use(LoggingMiddleware(s.logger.Desugar()))
 	router.Use(RealIP)
 	router.HandleFunc("/health", health).Methods("GET")
-	router.HandleFunc("/join/{name}", s.webSocketHandler).Methods("GET")
+	router.HandleFunc("/ws/games/{gameName}/players/{playerName}", s.webSocketHandler).Methods("GET")
 	router.HandleFunc("/games", s.newGame).Methods("POST")
 
 	http.Handle("/", router)

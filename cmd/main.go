@@ -18,6 +18,10 @@ func main() {
 	var wsWriteBufferSize int
 	var maxGameNameLength uint
 	var minGameNameLength uint
+	var maxPlayerNameLength uint
+	var minPlayerNameLength uint
+	flag.UintVar(&maxPlayerNameLength, "max-player-name-len", 15, "Max player name length")
+	flag.UintVar(&minPlayerNameLength, "min-player-name-len", 5, "Min player name length")
 	flag.UintVar(&maxGameNameLength, "max-game-name-len", 15, "Max game name length")
 	flag.UintVar(&minGameNameLength, "min-game-name-len", 5, "Min game name length")
 	flag.Uint64Var(&maxWsConnections, "max-ws-connections", 256, "Max number of concurrent WebSocket connections")
@@ -48,6 +52,8 @@ func main() {
 		maxWsConnections,
 		maxGameNameLength,
 		minGameNameLength,
+		maxPlayerNameLength,
+		minPlayerNameLength,
 		wsReadBufferSize,
 		wsWriteBufferSize)
 	server.Serve()
