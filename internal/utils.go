@@ -1,24 +1,30 @@
 package internal
 
 import (
+	"errors"
 	"fmt"
+	"math/rand"
+	"net"
+	"net/http"
+	"strings"
+
 	"github.com/gorilla/handlers"
 	"github.com/gorilla/mux"
 	"github.com/gorilla/websocket"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapio"
-	"math/rand"
-	"net"
-	"net/http"
-	"strings"
 )
 
-func Sync(logger *zap.Logger) {
-	_ = logger.Sync()
+func ignore(fn func() error) {
+	_ = fn()
 }
 
-func Close(connection *websocket.Conn) {
-	_ = connection.Close()
+func IsCloseError(err error) bool {
+	var closeError *websocket.CloseError
+	if errors.As(err, &closeError) || errors.Is(err, net.ErrClosed) {
+		return true
+	}
+	return false
 }
 
 func LoggingMiddleware(logger *zap.Logger) mux.MiddlewareFunc {

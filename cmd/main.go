@@ -3,58 +3,66 @@ package main
 import (
 	"flag"
 	"fmt"
-	"github.com/BielosX/lemonade/internal"
-	"go.uber.org/zap"
-	"go.uber.org/zap/zapcore"
 	"math"
 	"os"
+
+	"github.com/BielosX/lemonade/internal"
+	"go.uber.org/zap"
 )
 
 func main() {
-	var port int
-	var logLevel string
-	var maxWsConnections uint64
-	var wsReadBufferSize int
-	var wsWriteBufferSize int
-	var maxGameNameLength uint
-	var minGameNameLength uint
-	var maxPlayerNameLength uint
-	var minPlayerNameLength uint
-	flag.UintVar(&maxPlayerNameLength, "max-player-name-len", 15, "Max player name length")
-	flag.UintVar(&minPlayerNameLength, "min-player-name-len", 5, "Min player name length")
-	flag.UintVar(&maxGameNameLength, "max-game-name-len", 15, "Max game name length")
-	flag.UintVar(&minGameNameLength, "min-game-name-len", 5, "Min game name length")
-	flag.Uint64Var(&maxWsConnections, "max-ws-connections", 256, "Max number of concurrent WebSocket connections")
-	flag.IntVar(&port, "port", 8080, "Port to listen on")
-	flag.StringVar(&logLevel, "log-level", zap.InfoLevel.String(), "Log level")
-	flag.IntVar(&wsReadBufferSize, "ws-read-buffer-size", 1024*64, "WebSocket read buffer size")
-	flag.IntVar(&wsWriteBufferSize, "ws-write-buffer-size", 1024*64, "WebSocket write buffer size")
+	serverConfig := internal.ServerConfig{}
+	flag.UintVar(
+		&serverConfig.MaxPlayerNameLength,
+		"max-player-name-len",
+		15,
+		"Max player name length",
+	)
+	flag.UintVar(
+		&serverConfig.MinPlayerNameLength,
+		"min-player-name-len",
+		5,
+		"Min player name length",
+	)
+	flag.UintVar(&serverConfig.MaxGameNameLength, "max-game-name-len", 15, "Max game name length")
+	flag.UintVar(&serverConfig.MinGameNameLength, "min-game-name-len", 5, "Min game name length")
+	flag.Uint64Var(
+		&serverConfig.MaxWsConnections,
+		"max-ws-connections",
+		256,
+		"Max number of concurrent WebSocket connections",
+	)
+	flag.IntVar(&serverConfig.Port, "port", 8080, "Port to listen on")
+	flag.StringVar(&serverConfig.LogLevel, "log-level", zap.InfoLevel.String(), "Log level")
+	flag.IntVar(
+		&serverConfig.WsReadBufferSize,
+		"ws-read-buffer-size",
+		1024*64,
+		"WebSocket read buffer size",
+	)
+	flag.IntVar(
+		&serverConfig.WsWriteBufferSize,
+		"ws-write-buffer-size",
+		1024*64,
+		"WebSocket write buffer size",
+	)
 	flag.Parse()
-	if !(port >= 1 && port <= math.MaxUint16) {
-		_, _ = fmt.Fprintf(os.Stderr, "Invalid port: %d\n", port)
+	if serverConfig.Port < 1 || serverConfig.Port > math.MaxUint16 {
+		_, _ = fmt.Fprintf(os.Stderr, "Invalid port: %d\n", serverConfig.Port)
 		os.Exit(1)
 	}
-	if minGameNameLength == 0 || minGameNameLength > maxGameNameLength {
-		_, _ = fmt.Fprintf(os.Stderr, "MinGameNameLen should be greater than 0 and less or equal MaxGameNameLen")
+	if serverConfig.MinGameNameLength == 0 ||
+		serverConfig.MinGameNameLength > serverConfig.MaxGameNameLength {
+		_, _ = fmt.Fprintf(
+			os.Stderr,
+			"MinGameNameLen should be greater than 0 and less or equal MaxGameNameLen",
+		)
 		os.Exit(1)
 	}
-	level, err := zapcore.ParseLevel(logLevel)
+	server, err := internal.NewServer(serverConfig)
 	if err != nil {
-		_, _ = fmt.Fprintf(os.Stderr, "Invalid log level: %s\n", logLevel)
 		os.Exit(1)
 	}
-	config := zap.NewDevelopmentConfig()
-	config.Level.SetLevel(level)
-	logger := zap.Must(config.Build())
-	defer internal.Sync(logger)
-	server := internal.NewServer(uint16(port),
-		logger,
-		maxWsConnections,
-		maxGameNameLength,
-		minGameNameLength,
-		maxPlayerNameLength,
-		minPlayerNameLength,
-		wsReadBufferSize,
-		wsWriteBufferSize)
+	defer server.Shutdown()
 	server.Serve()
 }

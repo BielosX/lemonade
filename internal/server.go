@@ -1,29 +1,42 @@
 package internal
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"github.com/gorilla/mux"
-	"github.com/gorilla/websocket"
-	"go.uber.org/zap"
 	"net/http"
 	"os"
 	"regexp"
 	"sync/atomic"
+
+	"github.com/gorilla/mux"
+	"github.com/gorilla/websocket"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
+	"golang.org/x/sync/errgroup"
 )
 
+type ServerConfig struct {
+	Port                         int
+	MaxWsConnections             uint64
+	MaxGameNameLength            uint
+	MinGameNameLength            uint
+	MaxPlayerNameLength          uint
+	MinPlayerNameLength          uint
+	MaxClientWsMessagesPerSecond uint64
+	WsReadBufferSize             int
+	WsWriteBufferSize            int
+	LogLevel                     string
+}
+
 type Server struct {
-	port                uint16
-	logger              *zap.SugaredLogger
-	maxWsConnections    int64
-	upgrader            *websocket.Upgrader
-	connectionCounter   atomic.Int64
-	gameNameRegex       *regexp.Regexp
-	playerNameRegex     *regexp.Regexp
-	maxGameNameLength   uint
-	minGameNameLength   uint
-	maxPlayerNameLength uint
-	minPlayerNameLength uint
+	logger            *zap.SugaredLogger
+	upgrader          *websocket.Upgrader
+	connectionCounter atomic.Int64
+	gameNameRegex     *regexp.Regexp
+	playerNameRegex   *regexp.Regexp
+	config            ServerConfig
 }
 
 func health(w http.ResponseWriter, _ *http.Request) {
@@ -49,7 +62,7 @@ func (s *Server) newGame(w http.ResponseWriter, r *http.Request) {
 			fmt.Sprintf("Provided Game Name does not match expression %s", s.gameNameRegex.String()))
 		return
 	} else if request.Name == "" {
-		gameName = RandomAlphanumeric(s.maxGameNameLength)
+		gameName = RandomAlphanumeric(s.config.MaxGameNameLength)
 		s.logger.Infof("Received empty Game Name, generated name: %s", gameName)
 	} else {
 		gameName = request.Name
@@ -57,10 +70,17 @@ func (s *Server) newGame(w http.ResponseWriter, r *http.Request) {
 	s.logger.Infof("Creating new game with name: %s", gameName)
 }
 
-func (s *Server) readMessage(conn *websocket.Conn, done *OneShot, output chan<- []byte) {
+func (s *Server) readMessage(ctx context.Context, conn *websocket.Conn, output chan<- []byte) error {
+	var err error
+	var messageType int
+	var msg []byte
+infLoop:
 	for {
-		messageType, msg, err := conn.ReadMessage()
+		messageType, msg, err = conn.ReadMessage()
 		if err != nil {
+			if IsCloseError(err) {
+				break
+			}
 			s.logger.Errorf("Unable to read message: %v", err)
 			break
 		}
@@ -71,28 +91,42 @@ func (s *Server) readMessage(conn *websocket.Conn, done *OneShot, output chan<- 
 			if err != nil {
 				s.logger.Errorf("Unable to write close message: %v", err)
 			}
-			err = conn.Close()
-			if err != nil {
-				s.logger.Error("Unable to close connection")
-			}
-			break
+			break infLoop
 		}
-		output <- msg
+		select {
+		case output <- msg:
+		case <-ctx.Done():
+			break infLoop
+		}
 	}
-	done.Signal()
+	closeErr := conn.Close()
+	return errors.Join(err, closeErr)
 }
 
-func (s *Server) writeMessage(conn *websocket.Conn, done *OneShot, input <-chan []byte) {
+func (s *Server) writeMessage(ctx context.Context, conn *websocket.Conn, input <-chan []byte) error {
+	var err error
+infLoop:
 	for {
-		message := <-input
-		s.logger.Info("Fetched message to write")
-		err := conn.WriteMessage(websocket.BinaryMessage, message)
-		if err != nil {
-			s.logger.Errorf("Unable to write message: %v", err)
-			break
+		select {
+		case message, ok := <-input:
+			if !ok {
+				break infLoop
+			}
+			s.logger.Info("Fetched message to write")
+			err = conn.WriteMessage(websocket.BinaryMessage, message)
+			if err != nil {
+				if IsCloseError(err) {
+					break infLoop
+				}
+				s.logger.Errorf("Unable to write message: %v", err)
+				break infLoop
+			}
+		case <-ctx.Done():
+			break infLoop
 		}
 	}
-	done.Signal()
+	closeErr := conn.Close()
+	return errors.Join(err, closeErr)
 }
 
 func (s *Server) webSocketHandler(w http.ResponseWriter, r *http.Request) {
@@ -117,63 +151,65 @@ func (s *Server) webSocketHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	s.logger.Infof("%s joining the game %s as %s", r.RemoteAddr, gameName, playerName)
 	conn, err := s.upgrader.Upgrade(w, r, nil)
-	defer Close(conn)
+	defer ignore(conn.Close)
 	if err != nil {
 		s.logger.Errorf("Unable to upgrade connection: %v", err)
 		return
-	} else if s.connectionCounter.Load() >= s.maxWsConnections {
+	} else if s.connectionCounter.Load() >= int64(s.config.MaxWsConnections) {
 		s.logger.Info("Sending Too Many Connections")
 		err = conn.WriteMessage(websocket.CloseMessage,
 			websocket.FormatCloseMessage(4429, "Too many connections"))
 		if err != nil {
 			s.logger.Errorf("Unable to write close message: %v", err)
 		}
-		err = conn.Close()
-		if err != nil {
-			s.logger.Errorf("Unable to close connection: %v", err)
-		}
 		return
 	}
 	s.logger.Infof("WebSocket connection from: %s", conn.RemoteAddr().String())
 	s.connectionCounter.Add(1)
 	defer s.connectionCounter.Add(-1)
-	done := NewOneShot()
 	payload := make(chan []byte, 1024)
-	go s.readMessage(conn, done, payload)
-	go s.writeMessage(conn, done, payload)
-	<-done.Done()
+	defer close(payload)
+	group, ctx := errgroup.WithContext(context.Background())
+	group.Go(func() error { return s.readMessage(ctx, conn, payload) })
+	group.Go(func() error { return s.writeMessage(ctx, conn, payload) })
+	err = group.Wait()
+	if err != nil {
+		if IsCloseError(err) {
+			s.logger.Infof("Connection from player %s closed", playerName)
+		} else {
+			s.logger.Errorf("Unable to handle message: %v", err)
+		}
+	}
+	s.logger.Infof("Handler for player %s game %s finished", playerName, gameName)
 }
 
-func NewServer(port uint16,
-	logger *zap.Logger,
-	maxWsConnections uint64,
-	maxGameNameLength uint,
-	minGameNameLength uint,
-	maxPlayerNameLength uint,
-	minPlayerNameLength uint,
-	wsReadBufferSize int,
-	wsWriteBufferSize int) *Server {
+func NewServer(config ServerConfig) (*Server, error) {
 	upgrader := &websocket.Upgrader{
-		ReadBufferSize:  wsReadBufferSize,
-		WriteBufferSize: wsWriteBufferSize,
+		ReadBufferSize:  config.WsReadBufferSize,
+		WriteBufferSize: config.WsWriteBufferSize,
 		CheckOrigin: func(j *http.Request) bool {
 			return true
 		},
 	}
-	gameNameRegex, _ := regexp.Compile(fmt.Sprintf("^\\w{%d,%d}$", minGameNameLength, maxGameNameLength))
-	playerNameRegex, _ := regexp.Compile(fmt.Sprintf("^\\w{%d,%d}$", minPlayerNameLength, maxPlayerNameLength))
-	return &Server{
-		logger:              logger.Sugar(),
-		port:                port,
-		maxWsConnections:    int64(maxWsConnections),
-		upgrader:            upgrader,
-		gameNameRegex:       gameNameRegex,
-		playerNameRegex:     playerNameRegex,
-		maxGameNameLength:   maxGameNameLength,
-		minGameNameLength:   minGameNameLength,
-		maxPlayerNameLength: maxPlayerNameLength,
-		minPlayerNameLength: minPlayerNameLength,
+	level, err := zapcore.ParseLevel(config.LogLevel)
+	if err != nil {
+		_, _ = fmt.Fprintf(os.Stderr, "Invalid log level: %s\n", config.LogLevel)
+		return nil, err
 	}
+	logConfig := zap.NewDevelopmentConfig()
+	logConfig.Level.SetLevel(level)
+	logger := zap.Must(logConfig.Build())
+	gameNameRegex, _ := regexp.Compile(fmt.Sprintf("^\\w{%d,%d}$",
+		config.MinGameNameLength, config.MaxGameNameLength))
+	playerNameRegex, _ := regexp.Compile(fmt.Sprintf("^\\w{%d,%d}$",
+		config.MinPlayerNameLength, config.MaxPlayerNameLength))
+	return &Server{
+		logger:          logger.Sugar(),
+		upgrader:        upgrader,
+		gameNameRegex:   gameNameRegex,
+		playerNameRegex: playerNameRegex,
+		config:          config,
+	}, nil
 }
 
 func (s *Server) Serve() {
@@ -186,11 +222,15 @@ func (s *Server) Serve() {
 
 	http.Handle("/", router)
 	s.logger.Infof("Starting Server with MaxWsConnections: %d, WsReadBufferSize: %d, WsWriteBufferSize: %d",
-		s.maxWsConnections, s.upgrader.ReadBufferSize, s.upgrader.WriteBufferSize)
-	s.logger.Infof("Listening on port %d", s.port)
-	err := http.ListenAndServe(fmt.Sprintf(":%d", s.port), nil)
+		s.config.MaxWsConnections, s.upgrader.ReadBufferSize, s.upgrader.WriteBufferSize)
+	s.logger.Infof("Listening on port %d", s.config.Port)
+	err := http.ListenAndServe(fmt.Sprintf(":%d", s.config.Port), nil)
 	if err != nil {
 		s.logger.Errorf("Unable to start listener: %v", err)
 		os.Exit(1)
 	}
+}
+
+func (s *Server) Shutdown() {
+	_ = s.logger.Sync()
 }
