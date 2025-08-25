@@ -21,13 +21,6 @@ install-gen-go:
 run:
     go run cmd/main.go
 
-lint:
-    golangci-lint run cmd internal
-
-fmt:
-    gofmt -w cmd
-    gofmt -w internal
-
 generate-protobuf: get-protoc install-gen-go
     PATH="$PATH:{{tools-dir}}" {{ protoc }} --proto_path=protobuf \
         --go_opt=default_api_level=API_OPAQUE \
