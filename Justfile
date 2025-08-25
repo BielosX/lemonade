@@ -1,6 +1,6 @@
 os := if os() == "macos" { "osx" } else { "linux" }
 arch := if arch() == "aarch64" { "aarch_64" } else { "x86_64" }
-version := "31.0"
+version := "32.0"
 protoc := env("PROTOC", "bin/protoc")
 tools-dir := justfile_directory() + "/bin"
 golangci-lint-version := "v2.3.0"
@@ -15,6 +15,9 @@ get-protoc:
        rm -rf protoc.zip
     fi
 
+install-gen-go:
+    GOBIN="{{tools-dir}}" go install google.golang.org/protobuf/cmd/protoc-gen-go@latest
+
 run:
     go run cmd/main.go
 
@@ -25,8 +28,8 @@ fmt:
     gofmt -w cmd
     gofmt -w internal
 
-generate-protobuf: get-protoc
-    {{ protoc }} --proto_path=protobuf \
+generate-protobuf: get-protoc install-gen-go
+    PATH="$PATH:{{tools-dir}}" {{ protoc }} --proto_path=protobuf \
         --go_opt=default_api_level=API_OPAQUE \
         --go_out={{ justfile_directory() }} \
         protobuf/*.proto
